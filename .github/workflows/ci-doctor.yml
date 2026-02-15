@@ -2,6 +2,16 @@ name: CI Doctor
 
 on:
   workflow_run:
+    workflows:
+      - "Claude Code"
+      - "Claude Code Review"
+      - "Auto Merge"
+      - "Template Sync"
+      - "Daily Digest"
+      - "Agent Health Report"
+      - "Doc Drift Detector"
+      - "PR Size Guardian"
+      - "Stale Issue Gardener"
     types: [completed]
 
 jobs:
