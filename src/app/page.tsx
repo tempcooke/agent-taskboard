@@ -2,11 +2,13 @@
 
 import { useConversations } from "@/hooks/use-conversations";
 import { useSession } from "@/hooks/use-session";
+import { useShowCompleted } from "@/hooks/use-show-completed";
 import { MobileNav } from "@/components/layout/mobile-nav";
 import { AttentionCard } from "@/components/dashboard/attention-card";
 import { ConversationItem } from "@/components/conversation/conversation-item";
-import { Settings, RefreshCw, Inbox } from "lucide-react";
+import { Settings, RefreshCw, Inbox, Archive } from "lucide-react";
 import Link from "next/link";
+import { cn } from "@/lib/utils";
 
 function getAttentionReason(conversation: { attentionLevel: string; labels: { name: string }[] }): string {
   switch (conversation.attentionLevel) {
@@ -26,12 +28,19 @@ function getAttentionReason(conversation: { attentionLevel: string; labels: { na
 export default function DashboardPage() {
   const { user, trackedRepos } = useSession();
   const { conversations, isLoading, mutate } = useConversations();
+  const { showCompleted, toggleShowCompleted, isLoaded } = useShowCompleted();
+
+  // Filter out closed items unless showCompleted is true
+  // While loading preference (!isLoaded), show all conversations to avoid empty state flash
+  const filteredConversations = !isLoaded || showCompleted
+    ? conversations
+    : conversations.filter((c) => c.state === "open");
 
   // Separate attention items from regular activity
-  const attentionItems = conversations.filter(
+  const attentionItems = filteredConversations.filter(
     (c) => c.attentionLevel !== "none"
   );
-  const recentActivity = conversations.slice(0, 10);
+  const recentActivity = filteredConversations.slice(0, 10);
 
   // Not configured yet
   if (trackedRepos.length === 0) {
@@ -73,6 +82,18 @@ export default function DashboardPage() {
         <div className="flex items-center justify-between">
           <h1 className="text-lg font-bold">Agent Taskboard</h1>
           <div className="flex items-center gap-1">
+            <button
+              onClick={() => toggleShowCompleted()}
+              className={cn(
+                "p-1.5 transition-colors",
+                showCompleted
+                  ? "text-foreground"
+                  : "text-muted-foreground hover:text-foreground"
+              )}
+              title={showCompleted ? "Hide completed" : "Show completed"}
+            >
+              <Archive className="h-4 w-4" />
+            </button>
             <button
               onClick={() => mutate()}
               className="p-1.5 text-muted-foreground hover:text-foreground"
