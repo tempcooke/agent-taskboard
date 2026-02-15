@@ -4,18 +4,35 @@ import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useSession, signOut } from "@/hooks/use-session";
 import { useRepos } from "@/hooks/use-repos";
-import { ArrowLeft, LogOut, Check } from "lucide-react";
+import { ArrowLeft, LogOut, Check, Sun, Moon, Monitor } from "lucide-react";
 
 export default function SettingsPage() {
   const router = useRouter();
   const { user, trackedRepos: sessionRepos } = useSession();
   const { repos, isLoading: reposLoading } = useRepos();
   const [tracked, setTracked] = useState<string[]>([]);
+  const [theme, setTheme] = useState<"system" | "light" | "dark">("system");
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     setTracked(sessionRepos);
   }, [sessionRepos]);
+
+  useEffect(() => {
+    // Fetch current theme preference
+    const fetchTheme = async () => {
+      try {
+        const res = await fetch("/api/settings");
+        if (res.ok) {
+          const data = await res.json();
+          setTheme(data.theme || "system");
+        }
+      } catch (error) {
+        console.error("Failed to fetch theme:", error);
+      }
+    };
+    fetchTheme();
+  }, []);
 
   const toggleRepo = (fullName: string) => {
     setTracked((prev) =>
@@ -30,10 +47,16 @@ export default function SettingsPage() {
     await fetch("/api/settings", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ trackedRepos: tracked }),
+      body: JSON.stringify({ trackedRepos: tracked, theme }),
     });
+    // Dispatch custom event to notify theme provider
+    window.dispatchEvent(new CustomEvent("theme-change", { detail: { theme } }));
     setSaving(false);
     router.push("/");
+  };
+
+  const handleThemeChange = (newTheme: "system" | "light" | "dark") => {
+    setTheme(newTheme);
   };
 
   return (
@@ -79,6 +102,51 @@ export default function SettingsPage() {
             >
               <LogOut className="h-4 w-4" />
               Sign Out
+            </button>
+          </div>
+        </section>
+
+        {/* Theme */}
+        <section>
+          <h2 className="mb-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+            Appearance
+          </h2>
+          <p className="mb-3 text-sm text-muted-foreground">
+            Choose your preferred theme for the app.
+          </p>
+          <div className="grid grid-cols-3 gap-2">
+            <button
+              onClick={() => handleThemeChange("light")}
+              className={`flex flex-col items-center gap-2 rounded-xl border p-4 transition-colors ${
+                theme === "light"
+                  ? "border-primary bg-primary/5 text-primary"
+                  : "hover:bg-accent"
+              }`}
+            >
+              <Sun className="h-6 w-6" />
+              <span className="text-sm font-medium">Light</span>
+            </button>
+            <button
+              onClick={() => handleThemeChange("dark")}
+              className={`flex flex-col items-center gap-2 rounded-xl border p-4 transition-colors ${
+                theme === "dark"
+                  ? "border-primary bg-primary/5 text-primary"
+                  : "hover:bg-accent"
+              }`}
+            >
+              <Moon className="h-6 w-6" />
+              <span className="text-sm font-medium">Dark</span>
+            </button>
+            <button
+              onClick={() => handleThemeChange("system")}
+              className={`flex flex-col items-center gap-2 rounded-xl border p-4 transition-colors ${
+                theme === "system"
+                  ? "border-primary bg-primary/5 text-primary"
+                  : "hover:bg-accent"
+              }`}
+            >
+              <Monitor className="h-6 w-6" />
+              <span className="text-sm font-medium">System</span>
             </button>
           </div>
         </section>

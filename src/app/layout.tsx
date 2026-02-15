@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Inter } from "next/font/google";
 import { ServiceWorkerRegister } from "@/components/sw-register";
+import { ThemeProvider } from "@/components/theme-provider";
 import "./globals.css";
 
 const inter = Inter({ subsets: ["latin"] });
@@ -38,8 +39,10 @@ export default function RootLayout({
         <link rel="apple-touch-icon" href="/icons/icon-192.png" />
       </head>
       <body className={inter.className}>
-        <ServiceWorkerRegister />
-        <div className="mx-auto min-h-dvh max-w-lg">{children}</div>
+        <ThemeProvider>
+          <ServiceWorkerRegister />
+          <div className="mx-auto min-h-dvh max-w-lg">{children}</div>
+        </ThemeProvider>
       </body>
     </html>
   );

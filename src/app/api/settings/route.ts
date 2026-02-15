@@ -9,6 +9,7 @@ export async function GET() {
 
   return NextResponse.json({
     trackedRepos: session.trackedRepos || [],
+    theme: session.theme || "system",
   });
 }
 
@@ -18,9 +19,14 @@ export async function PUT(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const { trackedRepos } = await req.json();
-  session.trackedRepos = trackedRepos;
+  const { trackedRepos, theme } = await req.json();
+  if (trackedRepos !== undefined) {
+    session.trackedRepos = trackedRepos;
+  }
+  if (theme !== undefined) {
+    session.theme = theme;
+  }
   await session.save();
 
-  return NextResponse.json({ trackedRepos });
+  return NextResponse.json({ trackedRepos: session.trackedRepos, theme: session.theme });
 }
