@@ -7,6 +7,7 @@ interface SessionResponse {
   authenticated: boolean;
   user?: GitHubUser;
   trackedRepos?: string[];
+  theme?: "system" | "light" | "dark";
 }
 
 const fetcher = (url: string) =>
@@ -25,6 +26,7 @@ export function useSession() {
   return {
     user: data?.user ?? null,
     trackedRepos: data?.trackedRepos ?? [],
+    theme: data?.theme ?? "system",
     isAuthenticated: data?.authenticated ?? false,
     isLoading,
     error,

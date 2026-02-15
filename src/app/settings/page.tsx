@@ -19,19 +19,11 @@ export default function SettingsPage() {
   }, [sessionRepos]);
 
   useEffect(() => {
-    // Fetch current theme preference
-    const fetchTheme = async () => {
-      try {
-        const res = await fetch("/api/settings");
-        if (res.ok) {
-          const data = await res.json();
-          setTheme(data.theme || "system");
-        }
-      } catch (error) {
-        console.error("Failed to fetch theme:", error);
-      }
-    };
-    fetchTheme();
+    // Load theme from localStorage
+    const storedTheme = localStorage.getItem("theme") as "system" | "light" | "dark" | null;
+    if (storedTheme) {
+      setTheme(storedTheme);
+    }
   }, []);
 
   const toggleRepo = (fullName: string) => {
@@ -49,14 +41,15 @@ export default function SettingsPage() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ trackedRepos: tracked, theme }),
     });
-    // Dispatch custom event to notify theme provider
-    window.dispatchEvent(new CustomEvent("theme-change", { detail: { theme } }));
     setSaving(false);
     router.push("/");
   };
 
   const handleThemeChange = (newTheme: "system" | "light" | "dark") => {
     setTheme(newTheme);
+    // Apply theme immediately and store in localStorage
+    localStorage.setItem("theme", newTheme);
+    window.dispatchEvent(new CustomEvent("theme-change", { detail: { theme: newTheme } }));
   };
 
   return (

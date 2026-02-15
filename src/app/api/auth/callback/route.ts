@@ -51,6 +51,7 @@ export async function GET(req: NextRequest) {
     name: userData.name,
   };
   session.trackedRepos = session.trackedRepos || [];
+  session.theme = session.theme || "system";
   await session.save();
 
   return NextResponse.redirect(new URL("/", req.url));

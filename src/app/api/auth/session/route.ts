@@ -11,6 +11,7 @@ export async function GET() {
     authenticated: true,
     user: session.githubUser,
     trackedRepos: session.trackedRepos || [],
+    theme: session.theme || "system",
   });
 }
 

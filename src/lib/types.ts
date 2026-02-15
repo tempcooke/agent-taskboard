@@ -9,7 +9,7 @@ export interface SessionData {
   githubToken: string;
   githubUser: GitHubUser;
   trackedRepos: string[]; // ["owner/repo", ...]
-  theme?: "system" | "light" | "dark";
+  theme: "system" | "light" | "dark";
 }
 
 export interface Conversation {
