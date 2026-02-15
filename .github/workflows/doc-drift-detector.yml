@@ -1,0 +1,64 @@
+name: Doc Drift Detector
+
+on:
+  schedule:
+    - cron: "0 10 * * 1"  # Monday 10am UTC
+  workflow_dispatch:
+
+jobs:
+  detect-drift:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      id-token: write
+    env:
+      HAS_MAX_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN != '' && 'true' || 'false' }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          token: ${{ secrets.PAT_TOKEN }}
+
+      # Primary: Use Max subscription (no additional cost)
+      - name: Run with Max subscription
+        id: max
+        if: env.HAS_MAX_TOKEN == 'true'
+        continue-on-error: true
+        uses: anthropics/claude-code-action@v1
+        with:
+          allowed_bots: "claude"
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          claude_args: >-
+            --max-turns 10
+            --dangerously-skip-permissions
+            --allowedTools "Bash(gh pr create:*),Bash(gh pr edit:*),Bash(git checkout:*),Bash(git push:*),Bash(git add:*),Bash(git commit:*),Bash(gh label create:*)"
+            --append-system-prompt "You are a documentation drift detector. Compare docs against actual code structure. Only create a PR if you find real drift (files/commands/paths that no longer exist). Do not rewrite or improve docs — only fix factual inaccuracies. Use --label auto-merge on the PR."
+
+      # Check if fallback is actually needed (avoid double-charging on max-turns)
+      - name: Check if fallback needed
+        id: check_fallback
+        if: steps.max.outcome != 'success'
+        run: |
+          # Check execution output for max-turns (avoid paying for fallback when work was done)
+          OUTPUT="/home/runner/work/_temp/claude-execution-output.json"
+          if [ -f "$OUTPUT" ] && grep -q "error_max_turns" "$OUTPUT" 2>/dev/null; then
+            echo "Max hit turn limit after doing work — skipping fallback"
+            echo "needed=false" >> $GITHUB_OUTPUT
+          else
+            echo "needed=true" >> $GITHUB_OUTPUT
+          fi
+
+      # Fallback: Use API key (pay-per-token) — only on auth failures, not max-turns
+      - name: Fallback to API key
+        if: steps.max.outcome != 'success' && steps.check_fallback.outputs.needed != 'false'
+        uses: anthropics/claude-code-action@v1
+        with:
+          allowed_bots: "claude"
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          claude_args: >-
+            --max-turns 10
+            --dangerously-skip-permissions
+            --allowedTools "Bash(gh pr create:*),Bash(gh pr edit:*),Bash(git checkout:*),Bash(git push:*),Bash(git add:*),Bash(git commit:*),Bash(gh label create:*)"
+            --append-system-prompt "You are a documentation drift detector. Compare docs against actual code structure. Only create a PR if you find real drift (files/commands/paths that no longer exist). Do not rewrite or improve docs — only fix factual inaccuracies. Use --label auto-merge on the PR."
