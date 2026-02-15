@@ -20,7 +20,7 @@ export default function NewTaskPage() {
 
     const [owner, repo] = selectedRepo.split("/");
     const title = extractIssueTitle(message);
-    const body = message;
+    const body = `@claude ${message}`;
 
     const res = await fetch("/api/github/issues", {
       method: "POST",
