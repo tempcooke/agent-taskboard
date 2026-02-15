@@ -1,0 +1,27 @@
+name: Template Sync
+
+on:
+  schedule:
+    - cron: "0 0 1 * *" # 1st of every month
+  workflow_dispatch: # Manual trigger from Actions tab
+
+jobs:
+  template-sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.TEMPLATE_SYNC_PAT }}
+
+      - name: Sync from template
+        uses: AndreasAugustin/actions-template-sync@v2
+        with:
+          source_repo_path: AdamCooke00/automated-developer-framework
+          upstream_branch: main
+          pr_labels: template_sync
+          pr_title: "chore: sync updates from template repository"
+          source_gh_token: ${{ secrets.TEMPLATE_SYNC_PAT }}
