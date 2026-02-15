@@ -31,11 +31,10 @@ export default function DashboardPage() {
   const { showCompleted, toggleShowCompleted, isLoaded } = useShowCompleted();
 
   // Filter out closed items unless showCompleted is true
-  const filteredConversations = isLoaded
-    ? showCompleted
-      ? conversations
-      : conversations.filter((c) => c.state === "open")
-    : conversations;
+  // While loading preference (!isLoaded), show all conversations to avoid empty state flash
+  const filteredConversations = !isLoaded || showCompleted
+    ? conversations
+    : conversations.filter((c) => c.state === "open");
 
   // Separate attention items from regular activity
   const attentionItems = filteredConversations.filter(

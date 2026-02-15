@@ -38,13 +38,14 @@ export async function listConversations(
     const [owner, repo] = repoFullName.split("/");
 
     // Fetch all issues (includes PRs in GitHub API) - both open and closed
+    // Increased per_page to 100 to ensure we get enough open issues after filtering
     const { data: issues } = await octokit.issues.listForRepo({
       owner,
       repo,
       state: "all",
       sort: "updated",
       direction: "desc",
-      per_page: 30,
+      per_page: 100,
     });
 
     for (const issue of issues) {

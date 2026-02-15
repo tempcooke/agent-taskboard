@@ -9,9 +9,14 @@ export function useShowCompleted() {
   const [isLoaded, setIsLoaded] = useState(false);
 
   useEffect(() => {
-    const stored = localStorage.getItem(STORAGE_KEY);
-    if (stored !== null) {
-      setShowCompleted(stored === "true");
+    try {
+      const stored = localStorage.getItem(STORAGE_KEY);
+      if (stored !== null) {
+        setShowCompleted(stored === "true");
+      }
+    } catch (error) {
+      // localStorage may be blocked or unavailable (e.g., private browsing)
+      console.warn("Failed to access localStorage:", error);
     }
     setIsLoaded(true);
   }, []);
@@ -19,7 +24,11 @@ export function useShowCompleted() {
   const toggleShowCompleted = (value?: boolean) => {
     const newValue = value !== undefined ? value : !showCompleted;
     setShowCompleted(newValue);
-    localStorage.setItem(STORAGE_KEY, String(newValue));
+    try {
+      localStorage.setItem(STORAGE_KEY, String(newValue));
+    } catch (error) {
+      console.warn("Failed to save to localStorage:", error);
+    }
   };
 
   return { showCompleted, toggleShowCompleted, isLoaded };
