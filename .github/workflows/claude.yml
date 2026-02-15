@@ -66,7 +66,8 @@ jobs:
           allowed_bots: "claude"
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           claude_args: >-
-            --max-turns ${{ steps.mode.outputs.planning == 'true' && '10' || '25' }}
+            --model ${{ steps.mode.outputs.planning == 'true' && 'claude-opus-4-6' || 'claude-sonnet-4-5-20250929' }}
+            --max-turns ${{ steps.mode.outputs.planning == 'true' && '15' || '25' }}
             ${{ steps.mode.outputs.planning != 'true' && '--dangerously-skip-permissions' || '' }}
             ${{ steps.mode.outputs.planning != 'true' && '--allowedTools "Bash(gh pr create:*),Bash(gh pr edit:*),Bash(gh issue close:*),Bash(gh label create:*)"' || '' }}
             --append-system-prompt "${{ steps.mode.outputs.planning == 'true' && 'PLANNING MODE: You are analyzing a task BEFORE implementation. Read the codebase to understand context. Create a detailed implementation plan. Ask clarifying questions if anything is ambiguous. DO NOT edit files, create branches, push code, or create pull requests. Post your plan and questions as a comment. Wait for the human to approve the plan before any implementation.' || 'IMPORTANT: After pushing changes, always create a PR using gh pr create with a --label flag. Use exactly one of: --label auto-merge, --label needs-review, or --label blocked. Default to needs-review when uncertain. Do NOT provide a Create PR URL link. Use gh pr create --title <title> --body <body> --label <risk-label> directly. IMPORTANT: If triggered from an issue, include Closes #<issue-number> in the PR body so the issue auto-closes when the PR merges.' }}"
@@ -93,7 +94,8 @@ jobs:
           allowed_bots: "claude"
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           claude_args: >-
-            --max-turns ${{ steps.mode.outputs.planning == 'true' && '10' || '25' }}
+            --model ${{ steps.mode.outputs.planning == 'true' && 'claude-opus-4-6' || 'claude-sonnet-4-5-20250929' }}
+            --max-turns ${{ steps.mode.outputs.planning == 'true' && '15' || '25' }}
             ${{ steps.mode.outputs.planning != 'true' && '--dangerously-skip-permissions' || '' }}
             ${{ steps.mode.outputs.planning != 'true' && '--allowedTools "Bash(gh pr create:*),Bash(gh pr edit:*),Bash(gh issue close:*),Bash(gh label create:*)"' || '' }}
             --append-system-prompt "${{ steps.mode.outputs.planning == 'true' && 'PLANNING MODE: You are analyzing a task BEFORE implementation. Read the codebase to understand context. Create a detailed implementation plan. Ask clarifying questions if anything is ambiguous. DO NOT edit files, create branches, push code, or create pull requests. Post your plan and questions as a comment. Wait for the human to approve the plan before any implementation.' || 'IMPORTANT: After pushing changes, always create a PR using gh pr create with a --label flag. Use exactly one of: --label auto-merge, --label needs-review, or --label blocked. Default to needs-review when uncertain. Do NOT provide a Create PR URL link. Use gh pr create --title <title> --body <body> --label <risk-label> directly. IMPORTANT: If triggered from an issue, include Closes #<issue-number> in the PR body so the issue auto-closes when the PR merges.' }}"

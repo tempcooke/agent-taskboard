@@ -2,6 +2,16 @@ name: CI Doctor
 
 on:
   workflow_run:
+    workflows:
+      - "Claude Code"
+      - "Claude Code Review"
+      - "Auto Merge"
+      - "Template Sync"
+      - "Daily Digest"
+      - "Agent Health Report"
+      - "Doc Drift Detector"
+      - "PR Size Guardian"
+      - "Stale Issue Gardener"
     types: [completed]
 
 jobs:
@@ -28,6 +38,7 @@ jobs:
         continue-on-error: true
         uses: anthropics/claude-code-action@v1
         with:
+          allowed_bots: "claude"
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           prompt: |
             A CI workflow has failed. Diagnose the failure and post a comment on the PR.
@@ -59,6 +70,7 @@ jobs:
         if: steps.max.outcome != 'success' && steps.check_fallback.outputs.needed != 'false'
         uses: anthropics/claude-code-action@v1
         with:
+          allowed_bots: "claude"
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           prompt: |
             A CI workflow has failed. Diagnose the failure and post a comment on the PR.

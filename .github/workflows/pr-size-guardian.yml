@@ -1,0 +1,77 @@
+name: PR Size Guardian
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+jobs:
+  size-check:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      id-token: write
+    env:
+      HAS_MAX_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN != '' && 'true' || 'false' }}
+    steps:
+      # Skip PRs labeled template_sync (template sync PRs can be large)
+      - name: Check for template_sync label
+        id: check_label
+        run: |
+          LABELS=$(gh pr view ${{ github.event.pull_request.number }} --json labels --jq '.labels[].name' --repo ${{ github.repository }})
+          if echo "$LABELS" | grep -q "template_sync"; then
+            echo "skip=true" >> $GITHUB_OUTPUT
+          else
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Checkout repository
+        if: steps.check_label.outputs.skip == 'false'
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      # Primary: Use Max subscription (no additional cost)
+      - name: Check PR size with Max subscription
+        id: max
+        if: steps.check_label.outputs.skip == 'false' && env.HAS_MAX_TOKEN == 'true'
+        continue-on-error: true
+        uses: anthropics/claude-code-action@v1
+        with:
+          allowed_bots: "claude"
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            Use `gh pr diff ${{ github.event.pull_request.number }} --patch` to count total lines changed.
+            If under 400 lines, respond with just 'OK' and stop.
+            If over 400 lines, post a comment suggesting how to split the PR based on files changed.
+          claude_args: "--max-turns 3 --dangerously-skip-permissions --append-system-prompt \"You are a PR size advisor. Count lines changed. If under 400 lines, respond with just 'OK' and stop. If over 400 lines, post a comment suggesting how to split the PR. Be specific — group files by concern. Keep the comment under 10 lines. Do not review code quality.\""
+          allowed_tools: "Bash(gh pr diff:*),Bash(gh pr comment:*),Bash(gh pr view:*)"
+
+      # Check if fallback is actually needed (avoid double-charging on max-turns)
+      - name: Check if fallback needed
+        id: check_fallback
+        if: steps.check_label.outputs.skip == 'false' && steps.max.outcome != 'success'
+        run: |
+          OUTPUT="/home/runner/work/_temp/claude-execution-output.json"
+          if [ -f "$OUTPUT" ] && grep -q "error_max_turns" "$OUTPUT" 2>/dev/null; then
+            echo "Max hit turn limit after doing work — skipping fallback"
+            echo "needed=false" >> $GITHUB_OUTPUT
+          else
+            echo "needed=true" >> $GITHUB_OUTPUT
+          fi
+
+      # Fallback: Use API key (pay-per-token) — only on auth failures, not max-turns
+      - name: Fallback to API key
+        if: steps.check_label.outputs.skip == 'false' && steps.max.outcome != 'success' && steps.check_fallback.outputs.needed != 'false'
+        uses: anthropics/claude-code-action@v1
+        with:
+          allowed_bots: "claude"
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: |
+            Use `gh pr diff ${{ github.event.pull_request.number }} --patch` to count total lines changed.
+            If under 400 lines, respond with just 'OK' and stop.
+            If over 400 lines, post a comment suggesting how to split the PR based on files changed.
+          claude_args: "--max-turns 3 --dangerously-skip-permissions --append-system-prompt \"You are a PR size advisor. Count lines changed. If under 400 lines, respond with just 'OK' and stop. If over 400 lines, post a comment suggesting how to split the PR. Be specific — group files by concern. Keep the comment under 10 lines. Do not review code quality.\""
+          allowed_tools: "Bash(gh pr diff:*),Bash(gh pr comment:*),Bash(gh pr view:*)"

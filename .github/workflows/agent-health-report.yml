@@ -1,0 +1,138 @@
+name: Agent Health Report
+
+on:
+  schedule:
+    - cron: "0 9 * * 5" # Friday 9am UTC
+  workflow_dispatch: # Manual trigger from Actions tab
+
+jobs:
+  health-report:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: read
+      actions: read
+      id-token: write
+    env:
+      HAS_MAX_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN != '' && 'true' || 'false' }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      # Primary: Use Max subscription (no additional cost)
+      - name: Generate health report with Max subscription
+        id: max
+        if: env.HAS_MAX_TOKEN == 'true'
+        continue-on-error: true
+        uses: anthropics/claude-code-action@v1
+        with:
+          allowed_bots: "claude"
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            Generate a weekly health report on Claude's activity and effectiveness.
+
+            Use GitHub CLI to gather data from the past 7 days:
+            - `gh pr list --state all --search "author:app/claude"` for PRs Claude created
+            - `gh run list --limit 50` for workflow run history
+            - Count PRs opened, merged, closed-without-merge
+            - Calculate merge rate (merged / total PRs)
+            - Group PRs by risk label (auto-merge, needs-review, blocked)
+            - Check for any workflow runs that failed
+            - Calculate average time from PR open to merge (for merged PRs only)
+
+            If there was NO Claude activity in the past 7 days, respond with "No activity" and do nothing else.
+
+            If there WAS activity, create a GitHub issue with the title "Agent Health Report — week of [today's date YYYY-MM-DD]" and add the label "agent-health-report" (create the label if it doesn't exist).
+
+            The issue body should contain these sections:
+
+            ## Summary Stats
+            - Total PRs created
+            - PRs merged
+            - PRs closed without merge
+            - Merge rate (percentage)
+            - Average time to merge (in hours or days)
+
+            ## PRs by Risk Label
+            - auto-merge: X PRs
+            - needs-review: X PRs
+            - blocked: X PRs
+            - unlabeled: X PRs
+
+            ## Failed Workflow Runs
+            List any workflow runs that failed in the past 7 days, with links.
+
+            ## Recommendations
+            Based on the data, provide 2-3 bullet points with actionable recommendations. Examples:
+            - If merge rate is low, suggest reviewing blocked PRs
+            - If many PRs lack risk labels, suggest updating CLAUDE.md
+            - If workflows are failing, suggest investigating common causes
+
+            Keep the report concise and scannable.
+          claude_args: "--max-turns 10 --dangerously-skip-permissions"
+
+      # Check if fallback is actually needed (avoid double-charging on max-turns)
+      - name: Check if fallback needed
+        id: check_fallback
+        if: steps.max.outcome != 'success'
+        run: |
+          OUTPUT="/home/runner/work/_temp/claude-execution-output.json"
+          if [ -f "$OUTPUT" ] && grep -q "error_max_turns" "$OUTPUT" 2>/dev/null; then
+            echo "Max hit turn limit after doing work — skipping fallback"
+            echo "needed=false" >> $GITHUB_OUTPUT
+          else
+            echo "needed=true" >> $GITHUB_OUTPUT
+          fi
+
+      # Fallback: Use API key (pay-per-token) — only on auth failures, not max-turns
+      - name: Fallback to API key
+        if: steps.max.outcome != 'success' && steps.check_fallback.outputs.needed != 'false'
+        uses: anthropics/claude-code-action@v1
+        with:
+          allowed_bots: "claude"
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: |
+            Generate a weekly health report on Claude's activity and effectiveness.
+
+            Use GitHub CLI to gather data from the past 7 days:
+            - `gh pr list --state all --search "author:app/claude"` for PRs Claude created
+            - `gh run list --limit 50` for workflow run history
+            - Count PRs opened, merged, closed-without-merge
+            - Calculate merge rate (merged / total PRs)
+            - Group PRs by risk label (auto-merge, needs-review, blocked)
+            - Check for any workflow runs that failed
+            - Calculate average time from PR open to merge (for merged PRs only)
+
+            If there was NO Claude activity in the past 7 days, respond with "No activity" and do nothing else.
+
+            If there WAS activity, create a GitHub issue with the title "Agent Health Report — week of [today's date YYYY-MM-DD]" and add the label "agent-health-report" (create the label if it doesn't exist).
+
+            The issue body should contain these sections:
+
+            ## Summary Stats
+            - Total PRs created
+            - PRs merged
+            - PRs closed without merge
+            - Merge rate (percentage)
+            - Average time to merge (in hours or days)
+
+            ## PRs by Risk Label
+            - auto-merge: X PRs
+            - needs-review: X PRs
+            - blocked: X PRs
+            - unlabeled: X PRs
+
+            ## Failed Workflow Runs
+            List any workflow runs that failed in the past 7 days, with links.
+
+            ## Recommendations
+            Based on the data, provide 2-3 bullet points with actionable recommendations. Examples:
+            - If merge rate is low, suggest reviewing blocked PRs
+            - If many PRs lack risk labels, suggest updating CLAUDE.md
+            - If workflows are failing, suggest investigating common causes
+
+            Keep the report concise and scannable.
+          claude_args: "--max-turns 10 --dangerously-skip-permissions"
