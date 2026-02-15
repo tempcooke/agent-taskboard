@@ -37,11 +37,11 @@ export async function listConversations(
   for (const repoFullName of repos) {
     const [owner, repo] = repoFullName.split("/");
 
-    // Fetch open issues (includes PRs in GitHub API)
+    // Fetch all issues (includes PRs in GitHub API) - both open and closed
     const { data: issues } = await octokit.issues.listForRepo({
       owner,
       repo,
-      state: "open",
+      state: "all",
       sort: "updated",
       direction: "desc",
       per_page: 30,
