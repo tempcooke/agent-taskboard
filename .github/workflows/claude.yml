@@ -33,6 +33,47 @@ jobs:
           fetch-depth: 1
           token: ${{ secrets.PAT_TOKEN }}
 
+      # Detect plan approval and remove planning label (must happen BEFORE mode detection)
+      - name: Detect plan approval and remove planning label
+        if: |
+          github.event_name == 'issue_comment' &&
+          (
+            contains(github.event.comment.body, 'approve') || contains(github.event.comment.body, 'Approve') || contains(github.event.comment.body, 'APPROVE') ||
+            contains(github.event.comment.body, 'implement') || contains(github.event.comment.body, 'Implement') || contains(github.event.comment.body, 'IMPLEMENT') ||
+            contains(github.event.comment.body, 'let''s proceed') || contains(github.event.comment.body, 'Let''s proceed') ||
+            contains(github.event.comment.body, 'proceed') || contains(github.event.comment.body, 'Proceed') || contains(github.event.comment.body, 'PROCEED')
+          )
+        run: |
+          set -e
+          ISSUE_NUM="${{ github.event.issue.number }}"
+
+          # Check if issue has planning label before proceeding
+          LABELS=$(gh issue view "$ISSUE_NUM" --repo "$GITHUB_REPOSITORY" --json labels --jq '[.labels[].name] | join(",")' 2>/dev/null || echo "")
+          if ! echo "$LABELS" | grep -q "planning"; then
+            echo "No planning label found - skipping approval detection"
+            exit 0
+          fi
+
+          # Validate that approval is from issue author or assignee
+          COMMENT_AUTHOR="${{ github.event.comment.user.login }}"
+          ISSUE_AUTHOR=$(gh issue view "$ISSUE_NUM" --repo "$GITHUB_REPOSITORY" --json author --jq '.author.login' 2>/dev/null || echo "")
+          ASSIGNEES=$(gh issue view "$ISSUE_NUM" --repo "$GITHUB_REPOSITORY" --json assignees --jq '[.assignees[].login] | join(",")' 2>/dev/null || echo "")
+
+          if [ "$COMMENT_AUTHOR" != "$ISSUE_AUTHOR" ] && ! echo "$ASSIGNEES" | grep -q "$COMMENT_AUTHOR"; then
+            echo "Approval comment not from issue author or assignee - ignoring"
+            exit 0
+          fi
+
+          echo "Plan approval detected from authorized user — removing planning label to switch to implementation mode"
+          if gh issue view "$ISSUE_NUM" --json labels --jq '[.labels[].name] | join(",")' | grep -q "planning"; then
+            gh issue edit "$ISSUE_NUM" --remove-label planning
+            echo "Planning label removed successfully"
+          else
+            echo "Planning label already removed"
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+
       # Detect if the issue has a "planning" label (plan-first workflow)
       - name: Detect planning mode
         id: mode
@@ -120,7 +161,7 @@ jobs:
             ${{ steps.mode.outputs.planning != 'true' && '--allowedTools "Bash(gh pr create:*),Bash(gh pr edit:*),Bash(gh issue close:*),Bash(gh label create:*)"' || '' }}
             --append-system-prompt "${{ steps.mode.outputs.planning == 'true' && 'PLANNING MODE: You are analyzing a task BEFORE implementation. Read the codebase to understand context. Create a detailed implementation plan. Ask clarifying questions if anything is ambiguous. You are in planning mode — do NOT edit files, create branches, push code, or create pull requests. You must wait for the human to approve your plan before any implementation begins. Post your plan and questions as a comment. Never fabricate technical constraints (e.g. permissions, GitHub App limitations) to explain why you are not implementing — simply state that you are in planning mode and awaiting approval. CRITICAL: You MUST post your complete plan as a comment before stopping. Do not stop until the plan is posted.' || 'CRITICAL WORKFLOW: You are running in CI with a turn limit. Follow this exact order: 1) Create a working branch and push it immediately. 2) Commit and push after EVERY meaningful change — do NOT batch commits until the end. 3) Create a PR early using gh pr create, even before work is complete, so progress is never lost. 4) Use exactly one label: --label auto-merge, --label needs-review, or --label blocked. Default to needs-review. 5) If triggered from an issue, include Closes #<issue-number> in the PR body. 6) NEVER stop without having committed and pushed your latest changes. 7) If you sense you are running low on turns, immediately commit, push, and ensure the PR exists.' }}"
 
-      # Auto-continue: if Claude hit the turn limit, post a continuation comment
+      # Auto-continue: if Claude hit the turn limit AND work is incomplete, post a continuation comment
       - name: Auto-continue on turn exhaustion
         if: always() && steps.mode.outputs.planning != 'true'
         env:
@@ -149,6 +190,22 @@ jobs:
             exit 0
           fi
 
+          # Check if work is already complete before auto-continuing
+          # 1. Issue already closed? (Claude may have closed it after finishing)
+          ISSUE_STATE=$(gh issue view "$NUM" --repo "${{ github.repository }}" --json state --jq '.state' 2>/dev/null || echo "OPEN")
+          if [ "$ISSUE_STATE" = "CLOSED" ]; then
+            echo "Issue #${NUM} is already closed — work complete, skipping auto-continue"
+            exit 0
+          fi
+
+          # 2. PR already created for this issue?
+          PR_FOUND=$(gh pr list --repo "${{ github.repository }}" --state open --json body \
+            --jq "[.[] | select(.body | contains(\"#${NUM}\"))] | length" 2>/dev/null || echo "0")
+          if [ "$PR_FOUND" -gt 0 ]; then
+            echo "Open PR already references issue #${NUM} — work complete, skipping auto-continue"
+            exit 0
+          fi
+
           # Count existing auto-continue comments (max 2 retries)
           COUNT=$(gh api "repos/${{ github.repository }}/issues/${NUM}/comments" \
             --paginate --jq '[.[] | select(.body | contains("<!-- auto-continue -->"))] | length' 2>/dev/null || echo "0")
@@ -158,7 +215,7 @@ jobs:
             exit 0
           fi
 
-          echo "Turn exhaustion detected (auto-continue $((COUNT + 1))/2) — posting continue comment"
+          echo "Turn exhaustion detected, work incomplete (auto-continue $((COUNT + 1))/2) — posting continue comment"
           $COMMENT_CMD "$NUM" --repo "${{ github.repository }}" --body "<!-- auto-continue -->
           @claude Continue where you left off. The previous run hit its turn limit. Check for any existing branches or commits you have already made. Complete the remaining work — commit, push, and ensure a PR exists."
 
@@ -179,6 +236,35 @@ jobs:
           if [ -n "$ISSUE_NUM" ]; then
             if ! gh issue edit "$ISSUE_NUM" --remove-label claude-working; then
               echo "Warning: Failed to remove claude-working label from issue #$ISSUE_NUM"
+            fi
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+
+      # Remove planning label after implementation completes
+      - name: Remove planning label after implementation
+        if: |
+          success() &&
+          steps.mode.outputs.planning != 'true' &&
+          (github.event_name == 'issues' || github.event_name == 'issue_comment')
+        run: |
+          ISSUE_NUM=""
+          if [ "${{ github.event_name }}" = "issues" ]; then
+            ISSUE_NUM="${{ github.event.issue.number }}"
+          elif [ "${{ github.event_name }}" = "issue_comment" ]; then
+            ISSUE_NUM="${{ github.event.issue.number }}"
+          fi
+          if [ -n "$ISSUE_NUM" ]; then
+            # Only remove if it exists
+            if gh issue view "$ISSUE_NUM" --json labels --jq '[.labels[].name] | join(",")' | grep -q "planning"; then
+              if gh issue edit "$ISSUE_NUM" --remove-label planning; then
+                echo "Planning label removed after implementation completed"
+              else
+                echo "Error: Failed to remove planning label from issue #$ISSUE_NUM" >&2
+                exit 1
+              fi
+            else
+              echo "No planning label to remove"
             fi
           fi
         env:
