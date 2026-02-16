@@ -10,6 +10,7 @@ jobs:
     permissions:
       contents: read
       pull-requests: write
+      issues: write
       id-token: write
     env:
       HAS_MAX_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN != '' && 'true' || 'false' }}
@@ -33,6 +34,10 @@ jobs:
             then post your review using `gh pr review` with the --comment flag
             and a markdown body. Focus on bugs, convention violations, and
             missing tests. One sentence per issue with the fix. Skip praise.
+
+            Format your review body as follows:
+            - If you find actionable bugs or issues: start the body with "## Issues Found" as the first line, then list each issue.
+            - If the code looks clean: start the body with "## No Issues" as the first line, followed by a brief confirmation.
           claude_args: "--max-turns 5 --dangerously-skip-permissions"
 
       # Check if fallback is actually needed (avoid double-charging on max-turns)
@@ -50,6 +55,7 @@ jobs:
 
       # Fallback: Use API key (pay-per-token) — only on auth failures, not max-turns
       - name: Fallback to API key
+        id: fallback
         if: steps.max.outcome != 'success' && steps.check_fallback.outputs.needed != 'false'
         uses: anthropics/claude-code-action@v1
         with:
@@ -60,4 +66,34 @@ jobs:
             then post your review using `gh pr review` with the --comment flag
             and a markdown body. Focus on bugs, convention violations, and
             missing tests. One sentence per issue with the fix. Skip praise.
+
+            Format your review body as follows:
+            - If you find actionable bugs or issues: start the body with "## Issues Found" as the first line, then list each issue.
+            - If the code looks clean: start the body with "## No Issues" as the first line, followed by a brief confirmation.
           claude_args: "--max-turns 5 --dangerously-skip-permissions"
+
+      # Request fixes for review findings
+      - name: Request fixes for review findings
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+        run: |
+          # Count existing auto-fix-request markers to prevent infinite loops
+          MARKER_COUNT=$(gh pr view ${{ github.event.pull_request.number }} --json comments --jq '.comments[].body' | grep -c '<!-- review-fix-cycle -->' || echo "0")
+
+          if [ "$MARKER_COUNT" -ge 2 ]; then
+            echo "Auto-fix cycle limit reached (2 iterations). Skipping fix request."
+            exit 0
+          fi
+
+          # Fetch the latest review body
+          REVIEW_BODY=$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews" \
+            --jq '[.[] | select(.state == "COMMENTED")] | sort_by(.submitted_at) | last | .body' || echo "")
+
+          # Check if review found issues (case-insensitive check)
+          if echo "$REVIEW_BODY" | head -n 1 | grep -iq "## Issues Found"; then
+            echo "Review found issues. Posting auto-fix request..."
+            gh pr comment ${{ github.event.pull_request.number }} --body "<!-- review-fix-cycle --> @claude The automated code review found issues that need fixing. Read the review comments above, fix the identified bugs and issues, commit, and push."
+          else
+            echo "No issues found in review or review body empty. Skipping fix request."
+          fi
