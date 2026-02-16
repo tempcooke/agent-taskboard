@@ -60,7 +60,7 @@ export async function listConversations(
         isBot: issue.user?.type === "Bot",
       };
 
-      const attentionLevel = computeAttentionLevel(labels, null, currentUser);
+      const attentionLevel = computeAttentionLevel(labels, null, currentUser, isPR ? "pull_request" : "issue");
 
       conversations.push({
         id: `${owner}-${repo}-${isPR ? "pr" : "issue"}-${issue.number}`,
@@ -241,7 +241,8 @@ export async function postComment(
 function computeAttentionLevel(
   labels: Label[],
   lastComment: Message | null,
-  _currentUser: string
+  _currentUser: string,
+  type: "issue" | "pull_request" = "issue"
 ): Conversation["attentionLevel"] {
   const labelNames = labels.map((l) => l.name.toLowerCase());
 
@@ -251,6 +252,11 @@ function computeAttentionLevel(
 
   if (lastComment?.author.isBot && containsQuestion(lastComment.body)) {
     return "urgent";
+  }
+
+  // Unlabeled open PRs default to needs-review so they don't slip through
+  if (type === "pull_request" && !labelNames.includes("auto-merge")) {
+    return "review";
   }
 
   return "none";
