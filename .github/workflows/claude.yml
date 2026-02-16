@@ -27,23 +27,6 @@ jobs:
     env:
       HAS_MAX_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN != '' && 'true' || 'false' }}
     steps:
-      # Add claude-working label when workflow starts
-      - name: Add working label
-        run: |
-          ISSUE_NUM=""
-          if [ "${{ github.event_name }}" = "issues" ]; then
-            ISSUE_NUM="${{ github.event.issue.number }}"
-          elif [ "${{ github.event_name }}" = "issue_comment" ]; then
-            ISSUE_NUM="${{ github.event.issue.number }}"
-          fi
-          if [ -n "$ISSUE_NUM" ]; then
-            if ! gh issue edit "$ISSUE_NUM" --add-label "claude-working" --repo "$GITHUB_REPOSITORY" 2>&1; then
-              echo "Warning: Failed to add claude-working label (may not exist or auth issue)"
-            fi
-          fi
-        env:
-          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
-
       - name: Checkout repository
         uses: actions/checkout@v6
         with:
@@ -69,6 +52,26 @@ jobs:
             echo "planning=true" >> $GITHUB_OUTPUT
           else
             echo "planning=false" >> $GITHUB_OUTPUT
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+
+      # Apply working label to indicate agent is actively working
+      - name: Apply working label
+        run: |
+          ISSUE_NUM=""
+          if [ "${{ github.event_name }}" = "issues" ]; then
+            ISSUE_NUM="${{ github.event.issue.number }}"
+          elif [ "${{ github.event_name }}" = "issue_comment" ]; then
+            ISSUE_NUM="${{ github.event.issue.number }}"
+          fi
+          if [ -n "$ISSUE_NUM" ]; then
+            if ! gh label create claude-working --color "0969DA" --description "Agent is actively working" --force; then
+              echo "Warning: Failed to create claude-working label"
+            fi
+            if ! gh issue edit "$ISSUE_NUM" --add-label claude-working; then
+              echo "Warning: Failed to apply claude-working label to issue #$ISSUE_NUM"
+            fi
           fi
         env:
           GH_TOKEN: ${{ secrets.PAT_TOKEN }}
@@ -159,9 +162,13 @@ jobs:
           $COMMENT_CMD "$NUM" --repo "${{ github.repository }}" --body "<!-- auto-continue -->
           @claude Continue where you left off. The previous run hit its turn limit. Check for any existing branches or commits you have already made. Complete the remaining work — commit, push, and ensure a PR exists."
 
-      # Remove claude-working label when workflow completes (always runs)
+      # Remove working label when workflow completes (always run, even on failure)
       - name: Remove working label
-        if: always()
+        if: |
+          always() && (
+            github.event_name == 'issues' ||
+            github.event_name == 'issue_comment'
+          )
         run: |
           ISSUE_NUM=""
           if [ "${{ github.event_name }}" = "issues" ]; then
@@ -170,8 +177,8 @@ jobs:
             ISSUE_NUM="${{ github.event.issue.number }}"
           fi
           if [ -n "$ISSUE_NUM" ]; then
-            if ! gh issue edit "$ISSUE_NUM" --remove-label "claude-working" --repo "$GITHUB_REPOSITORY" 2>&1; then
-              echo "Warning: Failed to remove claude-working label (may not exist or auth issue)"
+            if ! gh issue edit "$ISSUE_NUM" --remove-label claude-working; then
+              echo "Warning: Failed to remove claude-working label from issue #$ISSUE_NUM"
             fi
           fi
         env:
