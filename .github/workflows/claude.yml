@@ -149,15 +149,16 @@ jobs:
         if: github.event_name == 'issues' && github.event.action == 'opened'
         run: |
           ISSUE_NUM="${{ github.event.issue.number }}"
-          ISSUE_BODY="${{ github.event.issue.body }}"
-          ISSUE_TITLE="${{ github.event.issue.title }}"
+
+          # Fetch issue data using gh to avoid shell escaping issues
+          ISSUE_DATA=$(gh issue view "$ISSUE_NUM" --repo "$GITHUB_REPOSITORY" --json body,title,labels)
+          ISSUE_BODY=$(echo "$ISSUE_DATA" | jq -r '.body // ""')
+          ISSUE_TITLE=$(echo "$ISSUE_DATA" | jq -r '.title // ""')
+          LABEL_COUNT=$(echo "$ISSUE_DATA" | jq '.labels | length')
 
           # Check if issue mentions @claude
           if echo "$ISSUE_BODY" | grep -q "@claude" || echo "$ISSUE_TITLE" | grep -q "@claude"; then
-            # Check if issue already has labels
-            LABELS=$(gh issue view "$ISSUE_NUM" --repo "$GITHUB_REPOSITORY" --json labels --jq '[.labels[].name] | length' 2>/dev/null || echo "0")
-
-            if [ "$LABELS" -eq 0 ]; then
+            if [ "$LABEL_COUNT" -eq 0 ]; then
               echo "New @claude issue detected - adding planning label"
               gh issue edit "$ISSUE_NUM" --add-label planning
             else
