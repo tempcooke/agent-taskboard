@@ -7,6 +7,7 @@ import {
   CheckCircle2,
   GitPullRequest,
   CircleDot,
+  Loader2,
 } from "lucide-react";
 import { formatRelativeTime, truncate } from "@/lib/utils";
 import type { Conversation } from "@/lib/types";
@@ -28,6 +29,12 @@ const LEVEL_CONFIG = {
     iconColor: "text-yellow-500",
     bg: "bg-yellow-500/5 border-yellow-500/20",
     label: "Review",
+  },
+  working: {
+    icon: Loader2,
+    iconColor: "text-sky-500 animate-spin",
+    bg: "bg-sky-500/5 border-sky-500/20",
+    label: "Agent working",
   },
   info: {
     icon: CheckCircle2,

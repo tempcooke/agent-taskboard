@@ -12,6 +12,7 @@ interface ConversationItemProps {
 const ATTENTION_STYLES = {
   urgent: "border-l-4 border-l-red-500",
   review: "border-l-4 border-l-yellow-500",
+  working: "border-l-4 border-l-sky-500",
   info: "border-l-4 border-l-blue-500",
   none: "",
 };

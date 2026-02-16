@@ -53,6 +53,7 @@ export default function ConversationPage() {
 
   const labels: string[] = labelsData?.labels || [];
   const isPlanning = labels.includes("planning");
+  const isWorking = labels.includes("claude-working");
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -137,7 +138,13 @@ export default function ConversationPage() {
                 {owner}/{repo} #{number}
               </span>
             </div>
-            {isPlanning && (
+            {isWorking && (
+              <span className="mt-0.5 inline-flex items-center gap-1 rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-800 dark:bg-blue-900/30 dark:text-blue-400">
+                <Loader2 className="h-3 w-3 animate-spin" />
+                Agent working
+              </span>
+            )}
+            {!isWorking && isPlanning && (
               <span className="mt-0.5 inline-block rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800 dark:bg-amber-900/30 dark:text-amber-400">
                 Planning
               </span>

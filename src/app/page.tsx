@@ -18,6 +18,8 @@ function getAttentionReason(conversation: { attentionLevel: string; labels: { na
       return "Agent is asking you a question";
     case "review":
       return "Pull request needs your review";
+    case "working":
+      return "Agent is actively working on this task";
     case "info":
       return "Task completed";
     default:
