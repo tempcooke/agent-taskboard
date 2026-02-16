@@ -16,7 +16,8 @@ jobs:
       (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
       (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
       (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude')) ||
-      (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')))
+      (github.event_name == 'issues' && github.event.action != 'labeled' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude'))) ||
+      (github.event_name == 'issues' && github.event.action == 'labeled' && github.event.label.name == 'planning' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')))
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -26,6 +27,116 @@ jobs:
       actions: read
     env:
       HAS_MAX_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN != '' && 'true' || 'false' }}
+      PLAN_AGENT_PROMPT: |
+        # ROLE
+        You are the Plan Agent. You create detailed implementation plans before any code is written.
+
+        # LABEL STATE MACHINE
+        You are currently in "planning" mode (label: planning).
+
+        Next states:
+        - "plan-review" → Hand off to Review Agent for critique
+
+        # CAPABILITIES
+        - Read files: Use Read, Glob, Grep to explore codebase
+        - Web search: Use WebSearch to research best practices, libraries, current patterns
+        - Manage labels: Use `gh issue edit <NUM> --add-label <LABEL>` and `--remove-label <LABEL>`
+        - Add reactions: Use `gh api repos/{owner}/{repo}/issues/comments/{comment_id}/reactions -f content='+1'`
+
+        # YOUR PROCESS
+        1. Read the task description in issue body and all comments
+        2. If humans have commented, acknowledge by adding ✅ reaction to their comments
+        3. Search the web for relevant documentation, libraries, patterns
+        4. Read codebase files to understand current architecture
+        5. Draft implementation plan including:
+           - Approach overview
+           - Files to create/modify
+           - Step-by-step implementation
+           - Risks and edge cases
+           - Any clarifying questions
+        6. Post your plan as a comment
+        7. Transition to review: `gh issue edit <ISSUE_NUM> --remove-label planning --add-label plan-review`
+
+        # HUMAN INTERACTION
+        - Humans may comment during your work
+        - Add ✅ reaction: `gh api repos/<OWNER>/<REPO>/issues/comments/<COMMENT_ID>/reactions -f content='+1'`
+        - Incorporate human feedback into your plan
+
+        # CONSTRAINTS
+        - Read-only: NO file edits, NO git operations, NO PR creation
+        - Focus on plan quality over speed
+        - Use WebSearch extensively - current best practices matter
+        - Never skip to implementation - always hand off to Review Agent
+        - 50 turn limit: If approaching limit, post your current plan and transition to review
+
+        # TURN MANAGEMENT
+        You have 50 turns. Track your progress. If you sense you're running low on turns (>40 turns used):
+        - Post whatever plan you have drafted so far
+        - Note any incomplete analysis
+        - Transition to review anyway: `gh issue edit <ISSUE_NUM> --remove-label planning --add-label plan-review`
+        - Review Agent will see your notes and may send back for completion or escalate to human
+      REVIEW_AGENT_PROMPT: |
+        # ROLE
+        You are the Review Agent. You critique plans to catch issues before code is written.
+
+        # LABEL STATE MACHINE
+        You are currently in "plan-review" mode (label: plan-review).
+
+        Next states:
+        - "planning" → Send back to Plan Agent for revisions
+        - "ready-to-implement" → Approve plan, trigger Implementation Agent
+        - "needs-human-input" → Escalate after 3 review cycles
+
+        # CAPABILITIES
+        - Read files: Use Read, Glob, Grep to verify plan feasibility
+        - Web search: Use WebSearch to validate approaches against current best practices
+        - Check history: Use `gh api repos/{owner}/{repo}/issues/{number}/events --paginate | jq`
+        - Manage labels: Use `gh issue edit <NUM> --add-label <LABEL>` and `--remove-label <LABEL>`
+        - Add reactions: Use `gh api repos/{owner}/{repo}/issues/comments/{comment_id}/reactions -f content='+1'`
+
+        # YOUR PROCESS
+        1. Read Plan Agent's plan (latest comment before you were triggered)
+        2. Read codebase to verify feasibility
+        3. Search web to validate:
+           - Are libraries/approaches current best practices?
+           - Are there better alternatives?
+           - Are there known issues?
+        4. Check for: security issues, edge cases, performance concerns, architecture mismatches
+        5. Count review cycles:
+           ```bash
+           EVENTS=$(gh api repos/$OWNER/$REPO/issues/$ISSUE_NUM/events --paginate)
+           CYCLES=$(echo "$EVENTS" | jq '[.[] | select(.event=="labeled" and .label.name=="plan-review")] | length')
+           ```
+        6. If CYCLES >= 3:
+           - Post: "Plan has been through 3 review cycles. Human decision required. [Summary]"
+           - Execute: `gh issue edit <NUM> --remove-label plan-review --add-label needs-human-input`
+           - STOP
+        7. Decision:
+           - If plan needs revision:
+             - Post detailed critique
+             - Execute: `gh issue edit <NUM> --remove-label plan-review --add-label planning`
+           - If plan approved:
+             - Post: "Plan approved. Proceeding to implementation."
+             - Execute: `gh issue edit <NUM> --remove-label plan-review --add-label ready-to-implement`
+
+        # HUMAN INTERACTION
+        - Humans may comment during review
+        - Add ✅ reaction to acknowledge: `gh api repos/<OWNER>/<REPO>/issues/comments/<COMMENT_ID>/reactions -f content='+1'`
+        - Incorporate human guidance into review
+
+        # CONSTRAINTS
+        - Read-only: NO file edits, NO git operations, NO PR creation
+        - Be thorough but practical - focus on real risks
+        - Use WebSearch to validate every technical decision
+        - Be specific in critiques - cite sources when possible
+        - 50 turn limit: If approaching limit, escalate to human
+
+        # TURN MANAGEMENT
+        You have 50 turns. Track your progress. If you sense you're running low on turns (>40 turns used):
+        - Post summary of your review findings so far
+        - Explain what still needs review
+        - Escalate: `gh issue edit <NUM> --remove-label plan-review --add-label needs-human-input`
+        - Post: "Review incomplete due to complexity. Human review required. [Summary of findings]"
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -33,49 +144,42 @@ jobs:
           fetch-depth: 1
           token: ${{ secrets.PAT_TOKEN }}
 
-      # Detect plan approval and remove planning label (must happen BEFORE mode detection)
-      - name: Detect plan approval and remove planning label
-        if: |
-          github.event_name == 'issue_comment' &&
-          (
-            contains(github.event.comment.body, 'approve') || contains(github.event.comment.body, 'Approve') || contains(github.event.comment.body, 'APPROVE') ||
-            contains(github.event.comment.body, 'implement') || contains(github.event.comment.body, 'Implement') || contains(github.event.comment.body, 'IMPLEMENT') ||
-            contains(github.event.comment.body, 'let''s proceed') || contains(github.event.comment.body, 'Let''s proceed') ||
-            contains(github.event.comment.body, 'proceed') || contains(github.event.comment.body, 'Proceed') || contains(github.event.comment.body, 'PROCEED')
-          )
+      # Initialize new issues with planning label
+      - name: Initialize new issues with planning label
+        if: github.event_name == 'issues' && github.event.action == 'opened'
         run: |
-          set -e
           ISSUE_NUM="${{ github.event.issue.number }}"
+          ISSUE_BODY="${{ github.event.issue.body }}"
+          ISSUE_TITLE="${{ github.event.issue.title }}"
 
-          # Check if issue has planning label before proceeding
-          LABELS=$(gh issue view "$ISSUE_NUM" --repo "$GITHUB_REPOSITORY" --json labels --jq '[.labels[].name] | join(",")' 2>/dev/null || echo "")
-          if ! echo "$LABELS" | grep -q "planning"; then
-            echo "No planning label found - skipping approval detection"
-            exit 0
-          fi
+          # Check if issue mentions @claude
+          if echo "$ISSUE_BODY" | grep -q "@claude" || echo "$ISSUE_TITLE" | grep -q "@claude"; then
+            # Check if issue already has labels
+            LABELS=$(gh issue view "$ISSUE_NUM" --repo "$GITHUB_REPOSITORY" --json labels --jq '[.labels[].name] | length' 2>/dev/null || echo "0")
 
-          # Validate that approval is from issue author or assignee
-          COMMENT_AUTHOR="${{ github.event.comment.user.login }}"
-          ISSUE_AUTHOR=$(gh issue view "$ISSUE_NUM" --repo "$GITHUB_REPOSITORY" --json author --jq '.author.login' 2>/dev/null || echo "")
-          ASSIGNEES=$(gh issue view "$ISSUE_NUM" --repo "$GITHUB_REPOSITORY" --json assignees --jq '[.assignees[].login] | join(",")' 2>/dev/null || echo "")
-
-          if [ "$COMMENT_AUTHOR" != "$ISSUE_AUTHOR" ] && ! echo "$ASSIGNEES" | grep -q "$COMMENT_AUTHOR"; then
-            echo "Approval comment not from issue author or assignee - ignoring"
-            exit 0
-          fi
-
-          echo "Plan approval detected from authorized user — removing planning label to switch to implementation mode"
-          if gh issue view "$ISSUE_NUM" --json labels --jq '[.labels[].name] | join(",")' | grep -q "planning"; then
-            gh issue edit "$ISSUE_NUM" --remove-label planning
-            echo "Planning label removed successfully"
-          else
-            echo "Planning label already removed"
+            if [ "$LABELS" -eq 0 ]; then
+              echo "New @claude issue detected - adding planning label"
+              gh issue edit "$ISSUE_NUM" --add-label planning
+            else
+              echo "Issue already has labels - skipping auto-label"
+            fi
           fi
         env:
           GH_TOKEN: ${{ secrets.PAT_TOKEN }}
 
-      # Detect if the issue has a "planning" label (plan-first workflow)
-      - name: Detect planning mode
+      # Ensure labels exist in repository
+      - name: Ensure labels exist
+        run: |
+          gh label create "planning" --color "0052CC" --description "Task needs implementation plan" --force || true
+          gh label create "plan-review" --color "FFA500" --description "Plan ready for critique" --force || true
+          gh label create "ready-to-implement" --color "00FF00" --description "Plan approved, ready for implementation" --force || true
+          gh label create "needs-human-input" --color "FF0000" --description "Agents need human decision" --force || true
+          gh label create "claude-working" --color "0969DA" --description "Agent is actively working" --force || true
+        env:
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+
+      # Detect agent mode based on labels (plan, review, or implement)
+      - name: Detect agent mode
         id: mode
         run: |
           ISSUE_NUM=""
@@ -85,14 +189,24 @@ jobs:
             ISSUE_NUM="${{ github.event.issue.number }}"
           fi
           if [ -z "$ISSUE_NUM" ]; then
-            echo "planning=false" >> $GITHUB_OUTPUT
+            echo "agent=none" >> $GITHUB_OUTPUT
             exit 0
           fi
           LABELS=$(gh issue view "$ISSUE_NUM" --repo "$GITHUB_REPOSITORY" --json labels --jq '[.labels[].name] | join(",")' 2>/dev/null || echo "")
-          if echo "$LABELS" | grep -q "planning"; then
-            echo "planning=true" >> $GITHUB_OUTPUT
+
+          # Check labels in priority order
+          if echo "$LABELS" | grep -q "ready-to-implement"; then
+            echo "agent=implement" >> $GITHUB_OUTPUT
+            echo "Agent mode: implement (ready-to-implement label found)"
+          elif echo "$LABELS" | grep -q "plan-review"; then
+            echo "agent=review" >> $GITHUB_OUTPUT
+            echo "Agent mode: review (plan-review label found)"
+          elif echo "$LABELS" | grep -q "planning"; then
+            echo "agent=plan" >> $GITHUB_OUTPUT
+            echo "Agent mode: plan (planning label found)"
           else
-            echo "planning=false" >> $GITHUB_OUTPUT
+            echo "agent=none" >> $GITHUB_OUTPUT
+            echo "Agent mode: none (no workflow labels found)"
           fi
         env:
           GH_TOKEN: ${{ secrets.PAT_TOKEN }}
@@ -117,53 +231,92 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.PAT_TOKEN }}
 
-      # Primary: Use Max subscription (no additional cost)
-      - name: Run with Max subscription
-        id: max
-        if: env.HAS_MAX_TOKEN == 'true'
+      # Plan Agent: Create implementation plan (Opus, 50 turns, read-only)
+      - name: Run Plan Agent
+        id: plan_max
+        if: steps.mode.outputs.agent == 'plan' && env.HAS_MAX_TOKEN == 'true'
         continue-on-error: true
         uses: anthropics/claude-code-action@v1
         with:
           allowed_bots: "claude"
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           claude_args: >-
-            --model ${{ steps.mode.outputs.planning == 'true' && 'claude-opus-4-6' || 'claude-sonnet-4-5-20250929' }}
-            --max-turns ${{ steps.mode.outputs.planning == 'true' && '25' || '50' }}
-            ${{ steps.mode.outputs.planning != 'true' && '--dangerously-skip-permissions' || '' }}
-            ${{ steps.mode.outputs.planning != 'true' && '--allowedTools "Bash(gh pr create:*),Bash(gh pr edit:*),Bash(gh issue close:*),Bash(gh label create:*)"' || '' }}
-            --append-system-prompt "${{ steps.mode.outputs.planning == 'true' && 'PLANNING MODE: You are analyzing a task BEFORE implementation. Read the codebase to understand context. Create a detailed implementation plan. Ask clarifying questions if anything is ambiguous. You are in planning mode — do NOT edit files, create branches, push code, or create pull requests. You must wait for the human to approve your plan before any implementation begins. Post your plan and questions as a comment. Never fabricate technical constraints (e.g. permissions, GitHub App limitations) to explain why you are not implementing — simply state that you are in planning mode and awaiting approval. CRITICAL: You MUST post your complete plan as a comment before stopping. Do not stop until the plan is posted.' || 'CRITICAL WORKFLOW: You are running in CI with a turn limit. Follow this exact order: 1) Create a working branch and push it immediately. 2) Commit and push after EVERY meaningful change — do NOT batch commits until the end. 3) Create a PR early using gh pr create, even before work is complete, so progress is never lost. 4) Use exactly one label: --label auto-merge, --label needs-review, or --label blocked. Default to needs-review. 5) If triggered from an issue, include Closes #<issue-number> in the PR body. 6) NEVER stop without having committed and pushed your latest changes. 7) If you sense you are running low on turns, immediately commit, push, and ensure the PR exists.' }}"
+            --model claude-opus-4-6
+            --max-turns 50
+            --allowedTools "Read,Glob,Grep,WebSearch,Bash(gh issue edit:--add-label*),Bash(gh issue edit:--remove-label*),Bash(gh api:repos/*/issues/comments/*/reactions*)"
+            --append-system-prompt "${{ env.PLAN_AGENT_PROMPT }}"
 
-      # Check if fallback is actually needed (avoid double-charging on max-turns)
-      - name: Check if fallback needed
-        id: check_fallback
-        if: steps.max.outcome != 'success'
-        run: |
-          # Check execution output for max-turns (avoid paying for fallback when work was done)
-          OUTPUT="/home/runner/work/_temp/claude-execution-output.json"
-          if [ -f "$OUTPUT" ] && grep -q "error_max_turns" "$OUTPUT" 2>/dev/null; then
-            echo "Max hit turn limit after doing work — skipping fallback"
-            echo "needed=false" >> $GITHUB_OUTPUT
-          else
-            echo "needed=true" >> $GITHUB_OUTPUT
-          fi
-
-      # Fallback: Use API key (pay-per-token) — only on auth failures, not max-turns
-      - name: Fallback to API key
-        if: steps.max.outcome != 'success' && steps.check_fallback.outputs.needed != 'false'
+      - name: Run Plan Agent (Fallback)
+        if: steps.mode.outputs.agent == 'plan' && (env.HAS_MAX_TOKEN != 'true' || steps.plan_max.outcome != 'success')
         uses: anthropics/claude-code-action@v1
         with:
           allowed_bots: "claude"
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           claude_args: >-
-            --model ${{ steps.mode.outputs.planning == 'true' && 'claude-opus-4-6' || 'claude-sonnet-4-5-20250929' }}
-            --max-turns ${{ steps.mode.outputs.planning == 'true' && '25' || '50' }}
-            ${{ steps.mode.outputs.planning != 'true' && '--dangerously-skip-permissions' || '' }}
-            ${{ steps.mode.outputs.planning != 'true' && '--allowedTools "Bash(gh pr create:*),Bash(gh pr edit:*),Bash(gh issue close:*),Bash(gh label create:*)"' || '' }}
-            --append-system-prompt "${{ steps.mode.outputs.planning == 'true' && 'PLANNING MODE: You are analyzing a task BEFORE implementation. Read the codebase to understand context. Create a detailed implementation plan. Ask clarifying questions if anything is ambiguous. You are in planning mode — do NOT edit files, create branches, push code, or create pull requests. You must wait for the human to approve your plan before any implementation begins. Post your plan and questions as a comment. Never fabricate technical constraints (e.g. permissions, GitHub App limitations) to explain why you are not implementing — simply state that you are in planning mode and awaiting approval. CRITICAL: You MUST post your complete plan as a comment before stopping. Do not stop until the plan is posted.' || 'CRITICAL WORKFLOW: You are running in CI with a turn limit. Follow this exact order: 1) Create a working branch and push it immediately. 2) Commit and push after EVERY meaningful change — do NOT batch commits until the end. 3) Create a PR early using gh pr create, even before work is complete, so progress is never lost. 4) Use exactly one label: --label auto-merge, --label needs-review, or --label blocked. Default to needs-review. 5) If triggered from an issue, include Closes #<issue-number> in the PR body. 6) NEVER stop without having committed and pushed your latest changes. 7) If you sense you are running low on turns, immediately commit, push, and ensure the PR exists.' }}"
+            --model claude-opus-4-6
+            --max-turns 50
+            --allowedTools "Read,Glob,Grep,WebSearch,Bash(gh issue edit:--add-label*),Bash(gh issue edit:--remove-label*),Bash(gh api:repos/*/issues/comments/*/reactions*)"
+            --append-system-prompt "${{ env.PLAN_AGENT_PROMPT }}"
+
+      # Review Agent: Critique plan (Opus, 50 turns, read-only)
+      - name: Run Review Agent
+        id: review_max
+        if: steps.mode.outputs.agent == 'review' && env.HAS_MAX_TOKEN == 'true'
+        continue-on-error: true
+        uses: anthropics/claude-code-action@v1
+        with:
+          allowed_bots: "claude"
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          claude_args: >-
+            --model claude-opus-4-6
+            --max-turns 50
+            --allowedTools "Read,Glob,Grep,WebSearch,Bash(gh issue edit:--add-label*),Bash(gh issue edit:--remove-label*),Bash(gh api:repos/*/issues/*/events*),Bash(gh api:repos/*/issues/comments/*/reactions*)"
+            --append-system-prompt "${{ env.REVIEW_AGENT_PROMPT }}"
+
+      - name: Run Review Agent (Fallback)
+        if: steps.mode.outputs.agent == 'review' && (env.HAS_MAX_TOKEN != 'true' || steps.review_max.outcome != 'success')
+        uses: anthropics/claude-code-action@v1
+        with:
+          allowed_bots: "claude"
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          claude_args: >-
+            --model claude-opus-4-6
+            --max-turns 50
+            --allowedTools "Read,Glob,Grep,WebSearch,Bash(gh issue edit:--add-label*),Bash(gh issue edit:--remove-label*),Bash(gh api:repos/*/issues/*/events*),Bash(gh api:repos/*/issues/comments/*/reactions*)"
+            --append-system-prompt "${{ env.REVIEW_AGENT_PROMPT }}"
+
+      # Implementation Agent: Execute approved plan (Sonnet, 50 turns)
+      - name: Run Implementation Agent
+        id: implement_max
+        if: steps.mode.outputs.agent == 'implement' && env.HAS_MAX_TOKEN == 'true'
+        continue-on-error: true
+        uses: anthropics/claude-code-action@v1
+        with:
+          allowed_bots: "claude"
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          claude_args: >-
+            --model claude-sonnet-4-5-20250929
+            --max-turns 50
+            --dangerously-skip-permissions
+            --allowedTools "Bash(gh pr create:*),Bash(gh pr edit:*),Bash(gh issue close:*),Bash(gh label create:*)"
+            --append-system-prompt "CRITICAL WORKFLOW: You are running in CI with a turn limit. Follow this exact order: 1) Create a working branch and push it immediately. 2) Commit and push after EVERY meaningful change — do NOT batch commits until the end. 3) Create a PR early using gh pr create, even before work is complete, so progress is never lost. 4) Use exactly one label: --label auto-merge, --label needs-review, or --label blocked. Default to needs-review. 5) If triggered from an issue, include Closes #<issue-number> in the PR body. 6) NEVER stop without having committed and pushed your latest changes. 7) If you sense you are running low on turns, immediately commit, push, and ensure the PR exists."
+
+      - name: Run Implementation Agent (Fallback)
+        if: steps.mode.outputs.agent == 'implement' && (env.HAS_MAX_TOKEN != 'true' || steps.implement_max.outcome != 'success')
+        uses: anthropics/claude-code-action@v1
+        with:
+          allowed_bots: "claude"
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          claude_args: >-
+            --model claude-sonnet-4-5-20250929
+            --max-turns 50
+            --dangerously-skip-permissions
+            --allowedTools "Bash(gh pr create:*),Bash(gh pr edit:*),Bash(gh issue close:*),Bash(gh label create:*)"
+            --append-system-prompt "CRITICAL WORKFLOW: You are running in CI with a turn limit. Follow this exact order: 1) Create a working branch and push it immediately. 2) Commit and push after EVERY meaningful change — do NOT batch commits until the end. 3) Create a PR early using gh pr create, even before work is complete, so progress is never lost. 4) Use exactly one label: --label auto-merge, --label needs-review, or --label blocked. Default to needs-review. 5) If triggered from an issue, include Closes #<issue-number> in the PR body. 6) NEVER stop without having committed and pushed your latest changes. 7) If you sense you are running low on turns, immediately commit, push, and ensure the PR exists."
 
       # Auto-continue: if Claude hit the turn limit AND work is incomplete, post a continuation comment
       - name: Auto-continue on turn exhaustion
-        if: always() && steps.mode.outputs.planning != 'true'
+        if: always() && steps.mode.outputs.agent == 'implement'
         env:
           GH_TOKEN: ${{ secrets.PAT_TOKEN }}
         run: |
@@ -241,11 +394,11 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.PAT_TOKEN }}
 
-      # Remove planning label after implementation completes
-      - name: Remove planning label after implementation
+      # Remove workflow labels after implementation completes
+      - name: Clean up workflow labels after implementation
         if: |
           success() &&
-          steps.mode.outputs.planning != 'true' &&
+          steps.mode.outputs.agent == 'implement' &&
           (github.event_name == 'issues' || github.event_name == 'issue_comment')
         run: |
           ISSUE_NUM=""
@@ -255,16 +408,22 @@ jobs:
             ISSUE_NUM="${{ github.event.issue.number }}"
           fi
           if [ -n "$ISSUE_NUM" ]; then
-            # Only remove if it exists
-            if gh issue view "$ISSUE_NUM" --json labels --jq '[.labels[].name] | join(",")' | grep -q "planning"; then
-              if gh issue edit "$ISSUE_NUM" --remove-label planning; then
-                echo "Planning label removed after implementation completed"
-              else
-                echo "Error: Failed to remove planning label from issue #$ISSUE_NUM" >&2
-                exit 1
-              fi
-            else
-              echo "No planning label to remove"
+            LABELS=$(gh issue view "$ISSUE_NUM" --json labels --jq '[.labels[].name] | join(",")' 2>/dev/null || echo "")
+
+            # Remove ready-to-implement label after implementation completes
+            if echo "$LABELS" | grep -q "ready-to-implement"; then
+              gh issue edit "$ISSUE_NUM" --remove-label ready-to-implement || true
+              echo "Removed ready-to-implement label after implementation completed"
+            fi
+
+            # Clean up any stray planning labels
+            if echo "$LABELS" | grep -q "planning"; then
+              gh issue edit "$ISSUE_NUM" --remove-label planning || true
+              echo "Removed planning label"
+            fi
+            if echo "$LABELS" | grep -q "plan-review"; then
+              gh issue edit "$ISSUE_NUM" --remove-label plan-review || true
+              echo "Removed plan-review label"
             fi
           fi
         env:
