@@ -36,6 +36,7 @@ export interface Message {
   body: string; // Markdown content
   createdAt: string;
   type: "issue_body" | "comment" | "pr_body" | "review_comment" | "system";
+  agentType?: AgentType; // only set for bot messages
 }
 
 export interface MessageAuthor {
@@ -57,6 +58,8 @@ export interface Label {
   name: string;
   color: string;
 }
+
+export type AgentType = "plan" | "review" | "implement" | null;
 
 export type AttentionLevel = "urgent" | "review" | "working" | "info" | "none";
 

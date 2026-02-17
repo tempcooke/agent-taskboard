@@ -1,5 +1,5 @@
 import { Octokit } from "@octokit/rest";
-import type { Conversation, Message, MessageAuthor, LinkedPR, Label } from "./types";
+import type { Conversation, Message, MessageAuthor, LinkedPR, Label, AgentType } from "./types";
 
 export function createOctokit(token: string) {
   return new Octokit({ auth: token });
@@ -92,6 +92,69 @@ export async function listConversations(
 
 // --- Messages (Comments) ---
 
+async function listLabelEvents(
+  octokit: Octokit,
+  owner: string,
+  repo: string,
+  issueNumber: number
+): Promise<Array<{ event: "labeled" | "unlabeled"; label: string; createdAt: string }>> {
+  const { data: events } = await octokit.issues.listEvents({
+    owner,
+    repo,
+    issue_number: issueNumber,
+    per_page: 100,
+  });
+
+  const labelEvents: Array<{ event: "labeled" | "unlabeled"; label: string; createdAt: string }> = [];
+
+  for (const e of events) {
+    if ((e.event === "labeled" || e.event === "unlabeled") && "label" in e && e.label?.name) {
+      labelEvents.push({
+        event: e.event,
+        label: e.label.name,
+        createdAt: e.created_at || "",
+      });
+    }
+  }
+
+  labelEvents.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+
+  return labelEvents;
+}
+
+function resolveAgentType(
+  commentTimestamp: string,
+  labelEvents: Array<{ event: "labeled" | "unlabeled"; label: string; createdAt: string }>
+): AgentType {
+  const workflowLabels = ["planning", "plan-review", "ready-to-implement"];
+  const commentTime = new Date(commentTimestamp).getTime();
+
+  // Filter to relevant events that happened before or at the comment timestamp
+  const relevantEvents = labelEvents.filter((e) => {
+    return (
+      workflowLabels.includes(e.label) &&
+      new Date(e.createdAt).getTime() <= commentTime
+    );
+  });
+
+  // Replay events to determine active workflow labels at comment time
+  const activeLabels = new Set<string>();
+  for (const event of relevantEvents) {
+    if (event.event === "labeled") {
+      activeLabels.add(event.label);
+    } else {
+      activeLabels.delete(event.label);
+    }
+  }
+
+  // Map active workflow label to agent type (prioritize: implement > review > plan)
+  if (activeLabels.has("ready-to-implement")) return "implement";
+  if (activeLabels.has("plan-review")) return "review";
+  if (activeLabels.has("planning")) return "plan";
+
+  return null;
+}
+
 export async function listMessages(
   token: string,
   owner: string,
@@ -175,6 +238,14 @@ export async function listMessages(
   messages.sort(
     (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
   );
+
+  // Fetch label events and enrich bot messages with agent type
+  const labelEvents = await listLabelEvents(octokit, owner, repo, issueNumber);
+  for (const message of messages) {
+    if (message.author.isBot) {
+      message.agentType = resolveAgentType(message.createdAt, labelEvents);
+    }
+  }
 
   return messages;
 }
