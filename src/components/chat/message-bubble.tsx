@@ -16,7 +16,7 @@ export function MessageBubble({ message, isCurrentUser }: MessageBubbleProps) {
   if (!body.trim()) return null;
 
   const getAgentBadge = () => {
-    if (!author.isBot) return null;
+    if (!agentType) return null;
 
     switch (agentType) {
       case "plan":
@@ -68,7 +68,7 @@ export function MessageBubble({ message, isCurrentUser }: MessageBubbleProps) {
         )}
       >
         <div className="flex items-center gap-2">
-          {author.isBot ? (
+          {agentType ? (
             getAgentBadge()
           ) : (
             <span className="text-xs font-medium text-muted-foreground">
