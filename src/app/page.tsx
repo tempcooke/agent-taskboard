@@ -12,14 +12,23 @@ import Link from "next/link";
 import { cn } from "@/lib/utils";
 
 function getAttentionReason(conversation: { attentionLevel: string; labels: { name: string }[] }): string {
+  const labelNames = conversation.labels.map((l) => l.name.toLowerCase());
   switch (conversation.attentionLevel) {
     case "urgent":
-      if (conversation.labels.some((l) => l.name.toLowerCase() === "blocked"))
+      if (labelNames.includes("needs-human-input"))
+        return "Agent needs your decision";
+      if (labelNames.includes("blocked"))
         return "Agent is blocked and needs your help";
       return "Agent is asking you a question";
     case "review":
       return "Pull request needs your review";
     case "working":
+      if (labelNames.includes("planning"))
+        return "Agent is creating an implementation plan";
+      if (labelNames.includes("plan-review"))
+        return "Plan is being reviewed";
+      if (labelNames.includes("ready-to-implement"))
+        return "Agent is implementing changes";
       return "Agent is actively working on this task";
     case "info":
       return "Task completed";
